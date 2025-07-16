@@ -238,10 +238,10 @@ void Usage(const BuildConfig& config) {
 "  -C DIR   change to DIR before doing anything else\n"
 "  -f FILE  specify input build file [default=build.ninja]\n"
 "\n"
-"  -j N     run N jobs in parallel (0 means infinity) [default=%d on this system]\n"
 "  -k N     keep going until N jobs fail (0 means infinity) [default=1]\n"
+"  -j N     run N jobs in parallel [default=%d]\n"
 "  -l N     do not start new jobs if the load average is greater than N\n"
-"  -m N     do not start new jobs if the memory usage exceeds N percent\n"
+"  -m N     throttle jobs if system RAM exceeds N MB or N percent (e.g. -m2000MB, -m90percent)\n"
 #if !(defined(__APPLE__) || defined(linux) || defined(_WIN32))
 "           (not yet implemented on this platform)\n"
 #endif
@@ -1707,8 +1707,6 @@ int ReadFlags(int* argc, char*** argv,
     { "quiet", no_argument, NULL, OPT_QUIET },
     { "delay",        required_argument, NULL,                    OPT_DELAY },
     { "mem-throttle", required_argument, NULL,             OPT_MEM_THROTTLE },
-    { "delay",          required_argument, NULL, 'D' },
-    { "mem-throttle",   required_argument, NULL, 'M' },
     { NULL, 0, NULL, 0 }
   };
 
@@ -1760,18 +1758,50 @@ int ReadFlags(int* argc, char*** argv,
         break;
       }
       case 'm': {
-       char* end;
-       long mb = strtol(optarg, &end, 10);
-       if (end == optarg || mb <= 0)
-       Fatal("-m parameter is invalid: must be a positive integer (MB)");
+      std::string arg(optarg);
+      size_t len = arg.length();
 
-       // store absolute free-RAM threshold
-       config->max_memory_bytes = uint64_t(mb) * 1024ULL * 1024ULL;
-       fprintf(stderr,
-          "[ninja] parsed -m: max_memory_bytes=%llu MB\n",
-          (unsigned long long)mb);
-       break;
-      }
+      if (len < 2) {
+      Fatal("-m parameter is too short");
+     }
+
+    // Detect suffix
+    if (arg[len - 1] == '%') {
+    // Percentage mode
+    std::string num = arg.substr(0, len - 1);
+    int pct = std::stoi(num);
+    if (pct < 0 || pct > 100) {
+      Fatal("-m percentage must be between 0 and 100");
+    }
+    config->max_memory_usage = pct / 100.0;
+    fprintf(stderr,
+            "[ninja] parsed -m: max_memory_usage=%.2f%%\n",
+            config->max_memory_usage * 100);
+    } else if (arg.find("MB") != std::string::npos || arg.find("mb") != std::string::npos) {
+    // MB suffix mode
+    std::string num = arg.substr(0, arg.find("MB"));
+    long mb = std::stol(num);
+    if (mb <= 0 || mb > 1048576) {
+      Fatal("-m MB value must be between 1 and 1048576");
+     }
+      config->max_memory_bytes = uint64_t(mb) * 1024ULL * 1024ULL;
+      fprintf(stderr,
+            "[ninja] parsed -m: max_memory_bytes=%llu MB\n",
+            (unsigned long long)mb);
+      } else {
+      // Default: treat as MB if no suffix
+      long mb = std::stol(arg);
+      if (mb <= 0 || mb > 1048576) {
+      Fatal("-m value must be between 1 and 1048576 MB");
+     }
+      config->max_memory_bytes = uint64_t(mb) * 1024ULL * 1024ULL;
+      fprintf(stderr,
+            "[ninja] parsed -m: max_memory_bytes=%llu MB\n",
+            (unsigned long long)mb);
+     }
+
+      break;
+     }
       case 'n':
         config->dry_run = true;
         config->disable_jobserver_client = true;

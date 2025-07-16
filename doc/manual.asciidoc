@@ -188,14 +188,17 @@ Ninja defaults to running commands in parallel anyway, so typically
 you don't need to pass `-j`.)
 
 In certain environments it might be helpful to dynamically limit the
-amount of running jobs depending on the currently available resources.
+number of running jobs depending on available system resources.
 Thus `ninja` can be started with `-l` and/or `-m` options to prevent
-from starting new jobs in case load average or memory usage exceed
-the defined limit. `-l` takes one single numeric argument defining
-the limit for the typical unix load average. `-m` takes one single
-numeric argument within [0,100] as a percentage of the memory usage
-(reduced by caches) on the host.
+new jobs from starting when load average or memory usage exceed
+defined limits.
 
+- `-l` takes a single numeric argument defining the maximum allowed
+  Unix load average.
+- `-m` accepts either an absolute memory cap (e.g. `-m2000MB`) or a
+  percentage (e.g. `-m90%`). In MB mode, Ninja throttles when system-used
+  RAM exceeds the specified value. In percentage mode, it throttles when
+  memory usage (excluding caches) exceeds the given fraction.
 
 GNU Jobserver support
 ~~~~~~~~~~~~~~~~~~~~~

@@ -88,17 +88,40 @@ size_t RealCommandRunner::CanRunMore() const {
     }
   }
 
-  // Absolute system-RAM throttle (-m <MB>)
- if (config_.max_memory_bytes > 0) {
+  // Throttle job spawning if system-used RAM exceeds user-defined absolute limit (-m <MB>)
+if (config_.max_memory_bytes > 0) {
   struct sysinfo si;
   sysinfo(&si);
-  // how many bytes are already in use
+
+  // Calculate current system-used RAM in bytes (includes buffers and cache)
   uint64_t used_bytes   = si.totalram - si.freeram;
-  // your threshold in bytes
   uint64_t thresh_bytes = config_.max_memory_bytes;
 
-  // once used RAM ≥ threshold, stop launching new jobs
+  // If used RAM exceeds threshold, prevent new jobs from launching
   if (used_bytes >= thresh_bytes) {
+    fprintf(stderr,
+            "[ninja] RAM throttle active: used=%lu MB, limit=%lu MB\n",
+            (unsigned long)(used_bytes / 1024 / 1024),
+            (unsigned long)(thresh_bytes / 1024 / 1024));
+    capacity = 0;
+  }
+}
+
+// Throttle job spawning if system RAM usage exceeds user-defined percentage (-m <percent>)
+if (config_.max_memory_usage > 0.0) {
+  struct sysinfo si;
+  sysinfo(&si);
+
+  // Estimate used memory excluding buffers (cached not available on all platforms)
+  uint64_t used = si.totalram - si.freeram - si.bufferram;
+  uint64_t total = si.totalram;
+  double usage_fraction = double(used) / double(total);
+
+  // If usage exceeds threshold, prevent new jobs from launching
+  if (usage_fraction >= config_.max_memory_usage) {
+    fprintf(stderr,
+            "[ninja] RAM throttle active: usage=%.2f%%, limit=%.2f%%\n",
+            usage_fraction * 100, config_.max_memory_usage * 100);
     capacity = 0;
   }
  }
