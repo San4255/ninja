@@ -28,4 +28,5 @@ extern bool g_keep_rsp;
 
 extern bool g_experimental_statcache;
 
+extern bool g_syslimits;
 #endif // NINJA_EXPLAIN_H_

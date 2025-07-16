@@ -18,6 +18,13 @@
 
 using namespace std;
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
 void CanonicalizePath(string* path) {
@@ -492,6 +499,30 @@ TEST(StripAnsiEscapeCodes, EscapeAtEnd) {
 
   stripped = StripAnsiEscapeCodes("foo\33[");
   EXPECT_EQ("foo", stripped);
+}
+
+TEST(SystemInformation, ProcessorCount) {
+#ifdef _WIN32
+  SYSTEM_INFO info;
+  GetSystemInfo(&info);
+  const int expected = info.dwNumberOfProcessors;
+#else
+  const int expected = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+  EXPECT_EQ(expected, GetProcessorCount());
+}
+
+TEST(SystemInformation, LoadAverage) {
+#if ! (defined(_WIN32) || defined(__CYGWIN__))
+  EXPECT_LT(0.0f, GetLoadAverage());
+#endif
+}
+
+TEST(SystemInformation, MemoryUsage) {
+#if defined(__APPLE__) || defined(linux) || defined(_WIN32)
+  EXPECT_LT(0.0f, GetMemoryUsage());
+  EXPECT_GT(1.0f, GetMemoryUsage());
+#endif
 }
 
 TEST(StripAnsiEscapeCodes, StripColors) {

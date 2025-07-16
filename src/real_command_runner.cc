@@ -16,6 +16,15 @@
 #include "jobserver.h"
 #include "limits.h"
 #include "subprocess.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#include <sys/sysinfo.h>
+#include <fstream>
 
 struct RealCommandRunner : public CommandRunner {
   explicit RealCommandRunner(const BuildConfig& config,
@@ -55,33 +64,89 @@ void RealCommandRunner::Abort() {
   subprocs_.Clear();
 }
 
+
 size_t RealCommandRunner::CanRunMore() const {
+  // Count both running and finished to know how many slots are in use
   size_t subproc_number =
       subprocs_.running_.size() + subprocs_.finished_.size();
 
-  int64_t capacity = config_.parallelism - subproc_number;
+  // Start with parallelism limit
+  int64_t capacity = config_.parallelism - static_cast<int>(subproc_number);
 
+  // If jobserver tokens are in use, let token acquisition do the throttling
   if (jobserver_) {
-    // When a jobserver token pool is used, make the
-    // capacity infinite, and let FindWork() limit jobs
-    // through token acquisitions instead.
     capacity = INT_MAX;
   }
 
+  // Enforce load everage limit
   if (config_.max_load_average > 0.0f) {
-    int load_capacity = config_.max_load_average - GetLoadAverage();
-    if (load_capacity < capacity)
+    double load = GetLoadAverage();
+    int load_capacity =
+        static_cast<int>(config_.max_load_average - load);
+    if (load_capacity < capacity) {
       capacity = load_capacity;
+    }
   }
 
-  if (capacity < 0)
+  // Absolute system-RAM throttle (-m <MB>)
+ if (config_.max_memory_bytes > 0) {
+  struct sysinfo si;
+  sysinfo(&si);
+  // how many bytes are already in use
+  uint64_t used_bytes   = si.totalram - si.freeram;
+  // your threshold in bytes
+  uint64_t thresh_bytes = config_.max_memory_bytes;
+
+  // once used RAM ≥ threshold, stop launching new jobs
+  if (used_bytes >= thresh_bytes) {
     capacity = 0;
+  }
+ }
 
-  if (capacity == 0 && subprocs_.running_.empty())
-    // Ensure that we make progress.
+  // Throttle based on cgroup memory usage (-M)
+  if (config_.max_cg_mem_usage > 0.0f) {
+   double cg_mem = GetCgroupMemoryUsage();
+
+  // DEBUG: show cgroup usage & capacity before throttling
+  fprintf(stderr,
+          "[ninja] cg=%.2f thresh=%.2f cap_before=%zu\n",
+          cg_mem, config_.max_cg_mem_usage, capacity);
+
+  if (cg_mem >= config_.max_cg_mem_usage) {
+    capacity = 0;
+  } else {
+    double headroom =
+        (config_.max_cg_mem_usage - cg_mem)
+        / config_.max_cg_mem_usage;
+    int mem_capacity = static_cast<int>(headroom * capacity);
+    if (mem_capacity < capacity)
+      capacity = mem_capacity;
+  }
+
+  // DEBUG: show capacity after throttling
+  fprintf(stderr, "[ninja] cap_after=%zu\n", capacity);
+}
+
+  // Never negative
+  if (capacity < 0) {
+    capacity = 0;
+  }
+
+  // If nothing can run but no jobs are active, force at least one to make progress
+  if (capacity == 0 && subprocs_.running_.empty()) {
     capacity = 1;
+  }
 
-  return capacity;
+    // Delay starting each job by --delay ms
+   if (capacity > 0 && config_.start_delay_ms > 0) {
+     // DEBUG: print before sleeping
+     fprintf(stderr,
+             "[ninja] delaying next job by %u ms (capacity=%zu)\n",
+             config_.start_delay_ms,
+             capacity);
+     usleep(config_.start_delay_ms * 1000);
+   }
+  return static_cast<size_t>(capacity);
 }
 
 bool RealCommandRunner::StartCommand(Edge* edge) {

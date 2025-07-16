@@ -99,8 +99,14 @@ std::string StripAnsiEscapeCodes(const std::string& in);
 int GetProcessorCount();
 
 /// @return the load average of the machine. A negative value is returned
-/// on error.
+/// on error or if the feature is not supported on this platform.
 double GetLoadAverage();
+
+/// @return the memory usage of the machine. A negative value is returned
+/// on error or if the feature is not supported on this platform.
+double GetMemoryUsage();
+
+double GetCgroupMemoryUsage();
 
 /// a wrapper for getcwd()
 std::string GetWorkingDirectory();

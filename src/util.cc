@@ -19,6 +19,7 @@
 #include <io.h>
 #elif defined( _WIN32)
 #include <windows.h>
+#include <Psapi.h>
 #include <io.h>
 #include <share.h>
 #include <direct.h>
@@ -42,6 +43,7 @@
 #include <algorithm>
 #include <vector>
 
+// to determine the load average
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
 #elif defined(__SVR4) && defined(__sun)
@@ -54,6 +56,13 @@
 #include <fstream>
 #include <map>
 #include "string_piece_util.h"
+#endif
+
+// to determine the memory usage
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#elif defined(linux)
+#include <fstream>
 #endif
 
 #if defined(__FreeBSD__)
@@ -989,6 +998,91 @@ double GetLoadAverage() {
 }
 #endif // _WIN32
 
+double GetMemoryUsage() {
+#if defined(__APPLE__)
+  // total memory
+  uint64_t physical_memory;
+  {
+    size_t length = sizeof(physical_memory);
+    if (!(sysctlbyname("hw.memsize",
+                       &physical_memory, &length, NULL, 0) == 0)) {
+      return -0.0f;
+    }
+  }
+
+  // pagesize
+  unsigned pagesize = 0;
+  {
+    size_t length = sizeof(pagesize);
+    if (!(sysctlbyname("hw.pagesize",
+                       &pagesize, &length, NULL, 0) == 0)) {
+      return -0.0f;
+    }
+  }
+
+  // current free memory
+  vm_statistics_data_t vm;
+  mach_msg_type_number_t ic = HOST_VM_INFO_COUNT;
+  host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t) &vm, &ic);
+
+  return 1.0 - static_cast<double>(pagesize) * vm.free_count / physical_memory;
+#elif defined(linux)
+  ifstream meminfo("/proc/meminfo", ifstream::in);
+  string token;
+  uint64_t free(0), total(0);
+  while (meminfo >> token) {
+    if (token == "MemAvailable:") {
+      meminfo >> free;
+    } else if (token == "MemTotal:") {
+      meminfo >> total;
+    } else {
+      continue;
+    }
+    if (free > 0 && total > 0) {
+      return (double) (total - free) / total;
+    }
+  }
+  return -0.0f; // this is the fallback in case the API has changed
+#elif (_WIN32)
+  PERFORMANCE_INFORMATION perf;
+  GetPerformanceInfo(&perf, sizeof(PERFORMANCE_INFORMATION));
+  return 1.0 - static_cast<double>(perf.PhysicalAvailable) /
+               static_cast<double>(perf.PhysicalTotal);
+#else // any unsupported platform
+  return -0.0f;
+#endif
+}
+
+double GetCgroupMemoryUsage() {
+  uint64_t usage = 0, limit = 0, cache = 0;
+
+  // Read raw usage & limit
+  std::ifstream("/sys/fs/cgroup/memory/memory.usage_in_bytes") >> usage;
+  std::ifstream("/sys/fs/cgroup/memory/memory.limit_in_bytes") >> limit;
+
+  // Read total_cache from memory.stat (so we subtract pagecache)
+  std::ifstream memstat("/sys/fs/cgroup/memory/memory.stat");
+  std::string token;
+  while (memstat >> token) {
+    if (token == "total_cache") {
+      memstat >> cache;
+      break;
+    }
+  }
+
+  // Only use these values if they look sane
+  if (limit > 0 && usage >= cache && usage <= limit) {
+    double ratio = double(usage - cache) / double(limit);
+    // clamp to [0.0, 1.0]
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    return ratio;
+  }
+
+  // Fallback when files are missing or out of range
+  return 0.0;
+}
+
 std::string GetWorkingDirectory() {
   std::string ret;
   char* success = NULL;
@@ -1029,3 +1123,5 @@ int platformAwareUnlink(const char* filename) {
 		return unlink(filename);
 	#endif
 }
+
+// vim: et sts=2 st=2 sw=2:

@@ -177,19 +177,43 @@ struct BuildConfig {
   BuildConfig() = default;
 
   enum Verbosity {
-    QUIET,  // No output -- used when testing.
-    NO_STATUS_UPDATE,  // just regular output but suppress status update
-    NORMAL,  // regular output and status update
+    QUIET,             // No output — used when testing.
+    NO_STATUS_UPDATE,  // Suppress status updates.
+    NORMAL,            // Regular output and status updates.
     VERBOSE
   };
-  Verbosity verbosity = NORMAL;
-  bool dry_run = false;
-  int parallelism = 1;
-  bool disable_jobserver_client = false;
-  int failures_allowed = 1;
-  /// The maximum load average we must not exceed. A negative value
-  /// means that we do not have any limit.
-  double max_load_average = -0.0f;
+
+  Verbosity verbosity            = NORMAL;
+  bool dry_run                   = false;
+  int parallelism                = 1;
+  bool disable_jobserver_client  = false;
+  int failures_allowed           = 1;
+
+  /// The maximum load average we must not exceed.
+  /// A negative value means “no limit.”
+  double max_load_average        = -0.0f;
+
+
+  /// The maximum system memory usage (fraction 0.0–1.0).
+  /// A negative value means “no limit.”
+  double max_memory_usage        = -0.0f;
+
+   /// The maximum absolute system memory in bytes.
+  /// Zero means “no limit.”
+  uint64_t max_memory_bytes     = 0;
+
+  /// Maximum delay factor (ms scaling for throttling).
+  /// A negative value means “no limit.”
+  int max_limit_delay            = -1;
+
+   /// Throttle jobs when cgroup-memory usage ≥ this fraction (0.0–1.0).
+  /// Negative means “no limit.”
+  double max_cg_mem_usage = -0.0f;
+
+  /// Delay starting each new job by this many milliseconds.
+  /// Zero means “no delay.”
+  unsigned start_delay_ms = 0;
+
   DepfileParserOptions depfile_parser_options;
 };
 

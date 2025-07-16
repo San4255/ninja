@@ -241,6 +241,12 @@ void Usage(const BuildConfig& config) {
 "  -j N     run N jobs in parallel (0 means infinity) [default=%d on this system]\n"
 "  -k N     keep going until N jobs fail (0 means infinity) [default=1]\n"
 "  -l N     do not start new jobs if the load average is greater than N\n"
+"  -m N     do not start new jobs if the memory usage exceeds N percent\n"
+#if !(defined(__APPLE__) || defined(linux) || defined(_WIN32))
+"           (not yet implemented on this platform)\n"
+#endif
+"--delay=<ms>         delay starting each new subjob by <ms> milliseconds\n"
+"--mem-throttle=<f>   throttle jobs when cgroup memory ≥ fraction <f> (0.0–1.0)\n"
 "  -n       dry run (don't run commands but act like they succeeded)\n"
 "\n"
 "  -d MODE  enable debugging (use '-d list' to list modes)\n"
@@ -1398,11 +1404,14 @@ bool DebugEnable(const string& name) {
   } else if (name == "nostatcache") {
     g_experimental_statcache = false;
     return true;
-  } else {
+ } else if (name == "syslimits") {
+    g_syslimits = true;
+    return true;
+ } else {
     const char* suggestion =
         SpellcheckString(name.c_str(),
                          "stats", "explain", "keepdepfile", "keeprsp",
-                         "nostatcache", NULL);
+                                  "nostatcache", "syslimits", NULL);
     if (suggestion) {
       Error("unknown debug setting '%s', did you mean '%s'?",
             name.c_str(), suggestion);
@@ -1690,18 +1699,22 @@ int ReadFlags(int* argc, char*** argv,
               Options* options, BuildConfig* config) {
   DeferGuessParallelism deferGuessParallelism(config);
 
-  enum { OPT_VERSION = 1, OPT_QUIET = 2 };
+  enum { OPT_VERSION = 1, OPT_QUIET = 2, OPT_DELAY, OPT_MEM_THROTTLE};
   const option kLongOptions[] = {
     { "help", no_argument, NULL, 'h' },
     { "version", no_argument, NULL, OPT_VERSION },
     { "verbose", no_argument, NULL, 'v' },
     { "quiet", no_argument, NULL, OPT_QUIET },
+    { "delay",        required_argument, NULL,                    OPT_DELAY },
+    { "mem-throttle", required_argument, NULL,             OPT_MEM_THROTTLE },
+    { "delay",          required_argument, NULL, 'D' },
+    { "mem-throttle",   required_argument, NULL, 'M' },
     { NULL, 0, NULL, 0 }
   };
 
   int opt;
   while (!options->tool &&
-         (opt = getopt_long(*argc, *argv, "d:f:j:k:l:nt:vw:C:h", kLongOptions,
+        (opt = getopt_long(*argc, *argv, "d:f:j:k:l:m:nt:vw:C:h", kLongOptions,
                             NULL)) != -1) {
     switch (opt) {
       case 'd':
@@ -1746,6 +1759,19 @@ int ReadFlags(int* argc, char*** argv,
         config->max_load_average = value;
         break;
       }
+      case 'm': {
+       char* end;
+       long mb = strtol(optarg, &end, 10);
+       if (end == optarg || mb <= 0)
+       Fatal("-m parameter is invalid: must be a positive integer (MB)");
+
+       // store absolute free-RAM threshold
+       config->max_memory_bytes = uint64_t(mb) * 1024ULL * 1024ULL;
+       fprintf(stderr,
+          "[ninja] parsed -m: max_memory_bytes=%llu MB\n",
+          (unsigned long long)mb);
+       break;
+      }
       case 'n':
         config->dry_run = true;
         config->disable_jobserver_client = true;
@@ -1768,6 +1794,22 @@ int ReadFlags(int* argc, char*** argv,
       case 'C':
         options->working_dir = optarg;
         break;
+      case OPT_DELAY: {
+        char* end;
+        long v = strtol(optarg, &end, 10);
+         if (*end || v < 0)
+        Fatal("invalid --delay value");
+        config->start_delay_ms = static_cast<unsigned>(v);
+        break;
+       }
+      case OPT_MEM_THROTTLE: {
+         char* end;
+         double f = strtod(optarg, &end);
+          if (*end || f < 0.0 || f > 1.0)
+        Fatal("invalid --mem-throttle value: must be in [0.0,1.0]");
+        config->max_cg_mem_usage = f;
+        break;
+       }
       case OPT_VERSION:
         printf("%s\n", kNinjaVersion);
         return 0;
